@@ -60,12 +60,12 @@ fn Mutexed(comptime T: type) type {
     };
 }
 
-pub const FOREGROUND_BLUE = 1;
-pub const FOREGROUND_GREEN = 2;
-pub const FOREGROUND_AQUA= 3;
-pub const FOREGROUND_RED = 4;
-pub const FOREGROUND_MAGENTA = 5;
-pub const FOREGROUND_YELLOW = 6;
+const FOREGROUND_BLUE = 1;
+const FOREGROUND_GREEN = 2;
+const FOREGROUND_AQUA= 3;
+const FOREGROUND_RED = 4;
+const FOREGROUND_MAGENTA = 5;
+const FOREGROUND_YELLOW = 6;
 
 
 /// different levels of logging
