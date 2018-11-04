@@ -1,5 +1,5 @@
 # *log.zig*
-a cross-platform, thread-safe logging library for zig.
+a cross-platform, thread-safe logging library for [zig](https://ziglang.org/).
 
 ## usage
 ```

@@ -13,7 +13,6 @@ const os = std.os;
 const windows = os.windows;
 const posix = os.posix;
 
-const Allocator = std.mem.Allocator;
 const Mutex = std.Mutex;
 
 const TtyColor = enum.{
@@ -123,6 +122,8 @@ pub const Logger = struct.{
     file_stream: os.File.OutStream,
     out_stream: ?ProtectedOutStream,
 
+    default_attrs: windows.WORD,
+
     level: Protected(Level),
     quiet: Protected(bool),
     use_color: bool,
@@ -130,16 +131,21 @@ pub const Logger = struct.{
     
     /// create `Logger`.
     pub fn new(file: os.File, use_color: bool) Self {
+        // TODO handle error
+        var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+        _ = windows.GetConsoleScreenBufferInfo(file.handle, &info);
+
         var result = Self.{
             .file = file,
-            .file_stream = undefined,
+            .file_stream = file.outStream(),
             .out_stream = undefined,
             .level = Protected(Level).init(Level.Trace),
             .quiet = Protected(bool).init(false),
+            .default_attrs = info.wAttributes,
             .use_color = use_color,
             .use_bright = true,
         };
-        result.file_stream = result.file.outStream();
+        
         return result;
     }
 
@@ -154,19 +160,6 @@ pub const Logger = struct.{
     }
 
     fn setTtyColorWindows(self: *Self, color: TtyColor) void {
-        // basically static vars in c
-        const Context = struct.{
-            var attrs: windows.WORD = undefined;
-            var init_attrs = false;
-        };
-
-        if (!Context.init_attrs) {
-            Context.init_attrs = true;
-            var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-            // TODO handle error
-            _ = windows.GetConsoleScreenBufferInfo(self.file.handle, &info);
-            Context.attrs = info.wAttributes;
-        }
 
         // TODO handle errors
         const bright = if (self.use_bright) windows.FOREGROUND_INTENSITY else u16(0);
@@ -177,7 +170,7 @@ pub const Logger = struct.{
             TtyColor.Magenta => FOREGROUND_MAGENTA | bright,
             TtyColor.Cyan    => FOREGROUND_AQUA | bright,
             TtyColor.Blue    => FOREGROUND_BLUE | bright,
-            TtyColor.Reset   => Context.attrs,
+            TtyColor.Reset   => self.default_attrs,
         });
     }
 
