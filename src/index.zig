@@ -5,60 +5,26 @@
 //
 
 const std = @import("std");
+const builtin = @import("builtin");
+
 const io = std.io;
 const os = std.os;
 
-const time = os.time;
+const windows = os.windows;
+const posix = os.posix;
 
 const Allocator = std.mem.Allocator;
 const Mutex = std.Mutex;
 
-/// TODO use these
 const TtyColor = enum.{
     Red,
     Green,
+    Yellow,
+    Magenta,
     Cyan,
-    White,
-    Dim,
-    Bold,
+    Blue,
     Reset,
 };
-
-fn setTtyColor(tty_color: TtyColor) void {
-    const S = struct.{
-        var attrs: windows.WORD = undefined;
-        var init_attrs = false;
-    };
-    if (!S.init_attrs) {
-        S.init_attrs = true;
-        var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-        // TODO handle error
-        _ = windows.GetConsoleScreenBufferInfo(stderr_file.handle, &info);
-        S.attrs = info.wAttributes;
-    }
-
-    // TODO handle errors
-    switch (tty_color) {
-        TtyColor.Red => {
-            _ = windows.SetConsoleTextAttribute(stderr_file.handle, windows.FOREGROUND_RED | windows.FOREGROUND_INTENSITY);
-        },
-        TtyColor.Green => {
-            _ = windows.SetConsoleTextAttribute(stderr_file.handle, windows.FOREGROUND_GREEN | windows.FOREGROUND_INTENSITY);
-        },
-        TtyColor.Cyan => {
-            _ = windows.SetConsoleTextAttribute(stderr_file.handle, windows.FOREGROUND_GREEN | windows.FOREGROUND_BLUE | windows.FOREGROUND_INTENSITY);
-        },
-        TtyColor.White, TtyColor.Bold => {
-            _ = windows.SetConsoleTextAttribute(stderr_file.handle, windows.FOREGROUND_RED | windows.FOREGROUND_GREEN | windows.FOREGROUND_BLUE | windows.FOREGROUND_INTENSITY);
-        },
-        TtyColor.Dim => {
-            _ = windows.SetConsoleTextAttribute(stderr_file.handle, windows.FOREGROUND_INTENSITY);
-        },
-        TtyColor.Reset => {
-            _ = windows.SetConsoleTextAttribute(stderr_file.handle, S.attrs);
-        },
-    }
-}
 
 fn Mutexed(comptime T: type) type {
     return struct.{
@@ -94,6 +60,14 @@ fn Mutexed(comptime T: type) type {
     };
 }
 
+pub const FOREGROUND_BLUE = 1;
+pub const FOREGROUND_GREEN = 2;
+pub const FOREGROUND_AQUA= 3;
+pub const FOREGROUND_RED = 4;
+pub const FOREGROUND_MAGENTA = 5;
+pub const FOREGROUND_YELLOW = 6;
+
+
 /// different levels of logging
 pub const Level = enum.{
     const Self = @This();
@@ -116,49 +90,128 @@ pub const Level = enum.{
         };
     }
 
-    fn color(self: Self) []const u8 {
+    fn color(self: Self) TtyColor {
         return switch (self) {
-            Self.Trace => "\x1b[94m",
-            Self.Debug => "\x1b[36m",
-            Self.Info =>  "\x1b[32m",
-            Self.Warn =>  "\x1b[33m",
-            Self.Error => "\x1b[31m",
-            Self.Fatal => "\x1b[35m",
+            Self.Trace => TtyColor.Blue,
+            Self.Debug => TtyColor.Cyan,
+            Self.Info =>  TtyColor.Green,
+            Self.Warn =>  TtyColor.Yellow,
+            Self.Error => TtyColor.Red,
+            Self.Fatal => TtyColor.Magenta,
         };
     }
 };
 
+pub fn isTty(handle: os.FileHandle) bool {
+    if (builtin.os == builtin.Os.windows) {
+        var out: windows.DWORD = undefined;
+        return windows.GetConsoleMode(handle, &out) == 0;
+    } else {
+        if (builtin.link_libc) {
+            return std.c.isatty(handle) != 0;
+        } else {
+            return posix.isatty(handle);
+        }
+    }
+}
+
 /// a simple thread-safe logger
 pub const Logger = struct.{
     const Self = @This();
+    const MutexedOutStream = Mutexed(*io.OutStream(os.File.WriteError));
 
-    var stderr_file: os.File = undefined;
-    var stderr_file_out_stream: os.File.OutStream = undefined;
-    var stderr_stream: ?Mutexed(*io.OutStream(os.File.WriteError)) = null;
+    file: os.File,
+    file_stream: os.File.OutStream,
+    out_stream: ?MutexedOutStream,
 
     level: Mutexed(Level),
     quiet: Mutexed(bool),
     use_color: bool,
-
+    use_bright: bool,
+    
     /// create `Logger`.
-    pub fn new(use_color: bool) Self {
-        return Self.{
+    pub fn new(file: os.File, use_color: bool) Self {
+        var result = Self.{
+            .file = file,
+            .file_stream = undefined,
+            .out_stream = undefined,
             .level = Mutexed(Level).init(Level.Trace),
             .quiet = Mutexed(bool).init(false),
             .use_color = use_color,
+            .use_bright = true,
         };
+        result.file_stream = result.file.outStream();
+        return result;
     }
 
-    fn getStderrStream() !Mutexed(*io.OutStream(os.File.WriteError)) {
-        if (stderr_stream) |st| {
-            return st;
+    // can't be done in `Logger.new` because of no copy-elision
+    fn getOutStream(self: *Self) MutexedOutStream {
+        if (self.out_stream) |out_stream| {
+            return out_stream;
         } else {
-            stderr_file = try io.getStdErr();
-            stderr_file_out_stream = stderr_file.outStream();
-            const st = &stderr_file_out_stream.stream;
-            stderr_stream = Mutexed(*io.OutStream(os.File.WriteError)).init(st);
-            return stderr_stream.?;
+            self.out_stream = MutexedOutStream.init(&self.file_stream.stream);
+            return self.out_stream.?;
         }
+    }
+
+    fn setTtyColorWindows(self: *Self, color: TtyColor) void {
+        // basically static vars in c
+        const Context = struct.{
+            var attrs: windows.WORD = undefined;
+            var init_attrs = false;
+        };
+
+        if (!Context.init_attrs) {
+            Context.init_attrs = true;
+            var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+            // TODO handle error
+            _ = windows.GetConsoleScreenBufferInfo(self.file.handle, &info);
+            Context.attrs = info.wAttributes;
+        }
+
+        // TODO handle errors
+        const bright = if (self.use_bright) windows.FOREGROUND_INTENSITY else u16(0);
+        _ = windows.SetConsoleTextAttribute(self.file.handle, switch (color) {
+            TtyColor.Red     => FOREGROUND_RED | bright,
+            TtyColor.Green   => FOREGROUND_GREEN | bright,
+            TtyColor.Yellow  => FOREGROUND_YELLOW | bright,
+            TtyColor.Magenta => FOREGROUND_MAGENTA | bright,
+            TtyColor.Cyan    => FOREGROUND_AQUA | bright,
+            TtyColor.Blue    => FOREGROUND_BLUE | bright,
+            TtyColor.Reset   => Context.attrs,
+        });
+    }
+
+    fn setTtyColor(self: *Self, color: TtyColor) void {
+        if (builtin.os == builtin.Os.windows and !isTty(self.file.handle)) {
+            self.setTtyColorWindows(color);
+        } else {
+            var out = self.getOutStream();
+            var out_held = out.acquire();
+            defer out_held.release();
+
+            const bright = if (self.use_bright) "\x1b[1m" else "";
+
+            switch (color) {
+                TtyColor.Red     => out_held.value.*.print("{}\x1b[31m", bright) catch return,
+                TtyColor.Green   => out_held.value.*.print("{}\x1b[32m", bright) catch return,
+                TtyColor.Yellow  => out_held.value.*.print("{}\x1b[33m", bright) catch return,
+                TtyColor.Magenta => out_held.value.*.print("{}\x1b[35m", bright) catch return,
+                TtyColor.Cyan    => out_held.value.*.print("{}\x1b[36m", bright) catch return,
+                TtyColor.Blue    => out_held.value.*.print("{}\x1b[34m", bright) catch return,
+                TtyColor.Reset   => out_held.value.*.write("\x1b[0m") catch return,
+            }
+        }
+    }
+
+    /// enable or disable color.
+    pub fn setColor(self: *Self, use_color: bool) void {
+        self.use_color = use_color;
+    }
+
+    /// enable or disable bright versions of the colors.
+    pub fn setBright(self: *Self, use_bright: bool) void {
+        self.use_bright = use_bright;
     }
 
     /// set the minimum logging level.
@@ -185,27 +238,34 @@ pub const Logger = struct.{
             return;
         }
 
-        var stderr = getStderrStream() catch return;
-        var stderr_held = stderr.acquire();
-        defer stderr_held.release();
+        var out = self.getOutStream();
+        var out_held = out.acquire();
+        defer out_held.release();
+        var out_stream = out_held.value.*;
 
         const quiet_held = self.quiet.acquire();
         defer quiet_held.release();
 
         /// TODO get time as a string
+        /// TODO get filename and number
         // time includes the year
 
         if (!quiet_held.value.*) {
-            if (self.use_color) {
-                stderr_held.value.*.print("{} {}[{s5}]\x1b[0m: ", "time", level.color(), level.toString()) catch return;
-                /// TODO get filename and number
+            if (self.use_color and self.file.isTty()) {
+                out_stream.print("{} ", os.time.timestamp()) catch return;
+                self.setTtyColor(level.color());
+                out_stream.print("[{}]", level.toString()) catch return;
+                self.setTtyColor(TtyColor.Reset);
+                out_stream.print(": ") catch return;
 
-                // stderr_held.value.*.print("{} {}[{s5}]\x1b[0m: \x1b[90m{}:{}:\x1b[0m", "time", level.color(), level.toString(), filename, line);
+                // out_stream.print("\x1b[90m{}:{}:", filename, line);
+                // self.resetTtyColor();
+
             } else {
-                stderr_held.value.*.print("{} [{s5}]: ", "time", level.toString()) catch return;
+                out_stream.print("{} [{s5}]: ", os.time.timestamp(), level.toString()) catch return;
             }
-            stderr_held.value.*.print(fmt, args) catch return;
-            stderr_held.value.*.print("\n") catch return;
+            out_stream.print(fmt, args) catch return;
+            out_stream.print("\n") catch return;
         }
 
         /// TODO add ability for log files
@@ -247,7 +307,7 @@ pub const Logger = struct.{
 };
 
 test "log_with_color" {
-    var logger = Logger.new(true);
+    var logger = Logger.new(try io.getStdOut(), true);
     std.debug.warn("\n");
 
     logger.logTrace("hi");
@@ -260,16 +320,22 @@ test "log_with_color" {
 
 fn worker(logger: *Logger) void {
     logger.logTrace("hi");
+    os.time.sleep(100);
     logger.logDebug("hey");
+    os.time.sleep(100);
     logger.logInfo("hello");
+    os.time.sleep(100);
     logger.logWarn("greetings");
+    os.time.sleep(100);
     logger.logError("salutations");
+    os.time.sleep(100);
     logger.logFatal("goodbye");
+    os.time.sleep(1000000000);
 }
 
 
 test "log_thread_safe" {
-    var logger = Logger.new(true);
+    var logger = Logger.new(try io.getStdOut(), true);
     std.debug.warn("\n");
 
     const thread_count = 10;
