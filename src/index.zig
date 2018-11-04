@@ -26,7 +26,7 @@ const TtyColor = enum.{
     Reset,
 };
 
-fn Mutexed(comptime T: type) type {
+fn Protected(comptime T: type) type {
     return struct.{
         const Self = @This();
 
@@ -52,7 +52,6 @@ fn Mutexed(comptime T: type) type {
 
         pub fn acquire(self: *Self) HeldMutex {
             return HeldMutex.{
-            // TODO guaranteed allocation elision
                 .held = self.mutex.acquire(),
                 .value = &self.private_data,
             };
@@ -102,7 +101,7 @@ pub const Level = enum.{
     }
 };
 
-pub fn isTty(handle: os.FileHandle) bool {
+pub fn supportsAnsi(handle: os.FileHandle) bool {
     if (builtin.os == builtin.Os.windows) {
         var out: windows.DWORD = undefined;
         return windows.GetConsoleMode(handle, &out) == 0;
@@ -118,14 +117,14 @@ pub fn isTty(handle: os.FileHandle) bool {
 /// a simple thread-safe logger
 pub const Logger = struct.{
     const Self = @This();
-    const MutexedOutStream = Mutexed(*io.OutStream(os.File.WriteError));
+    const ProtectedOutStream = Protected(*io.OutStream(os.File.WriteError));
 
     file: os.File,
     file_stream: os.File.OutStream,
-    out_stream: ?MutexedOutStream,
+    out_stream: ?ProtectedOutStream,
 
-    level: Mutexed(Level),
-    quiet: Mutexed(bool),
+    level: Protected(Level),
+    quiet: Protected(bool),
     use_color: bool,
     use_bright: bool,
     
@@ -135,8 +134,8 @@ pub const Logger = struct.{
             .file = file,
             .file_stream = undefined,
             .out_stream = undefined,
-            .level = Mutexed(Level).init(Level.Trace),
-            .quiet = Mutexed(bool).init(false),
+            .level = Protected(Level).init(Level.Trace),
+            .quiet = Protected(bool).init(false),
             .use_color = use_color,
             .use_bright = true,
         };
@@ -145,11 +144,11 @@ pub const Logger = struct.{
     }
 
     // can't be done in `Logger.new` because of no copy-elision
-    fn getOutStream(self: *Self) MutexedOutStream {
+    fn getOutStream(self: *Self) ProtectedOutStream {
         if (self.out_stream) |out_stream| {
             return out_stream;
         } else {
-            self.out_stream = MutexedOutStream.init(&self.file_stream.stream);
+            self.out_stream = ProtectedOutStream.init(&self.file_stream.stream);
             return self.out_stream.?;
         }
     }
@@ -183,7 +182,7 @@ pub const Logger = struct.{
     }
 
     fn setTtyColor(self: *Self, color: TtyColor) void {
-        if (builtin.os == builtin.Os.windows and !isTty(self.file.handle)) {
+        if (builtin.os == builtin.Os.windows and !supportsAnsi(self.file.handle)) {
             self.setTtyColorWindows(color);
         } else {
             var out = self.getOutStream();
@@ -314,15 +313,15 @@ test "log_with_color" {
 
 fn worker(logger: *Logger) void {
     logger.logTrace("hi");
-    os.time.sleep(100);
+    os.time.sleep(10000);
     logger.logDebug("hey");
-    os.time.sleep(100);
+    os.time.sleep(10);
     logger.logInfo("hello");
     os.time.sleep(100);
     logger.logWarn("greetings");
-    os.time.sleep(100);
+    os.time.sleep(1000);
     logger.logError("salutations");
-    os.time.sleep(100);
+    os.time.sleep(10000);
     logger.logFatal("goodbye");
     os.time.sleep(1000000000);
 }
@@ -332,7 +331,7 @@ test "log_thread_safe" {
     var logger = Logger.new(try io.getStdOut(), true);
     std.debug.warn("\n");
 
-    const thread_count = 10;
+    const thread_count = 5;
     var threads: [thread_count]*std.os.Thread = undefined;
     
     for (threads) |*t| {
