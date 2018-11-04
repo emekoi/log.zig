@@ -246,8 +246,8 @@ pub const Logger = struct.{
         const quiet_held = self.quiet.acquire();
         defer quiet_held.release();
 
-        /// TODO get time as a string
         /// TODO get filename and number
+        /// TODO get time as a string
         // time includes the year
 
         if (!quiet_held.value.*) {
@@ -267,12 +267,6 @@ pub const Logger = struct.{
             out_stream.print(fmt, args) catch return;
             out_stream.print("\n") catch return;
         }
-
-        /// TODO add ability for log files
-
-        // log_file.print("{} [{s5}]: ", "time", level.toString());
-        // log_file.print(fmt, args);
-        // log_file.print("\n");
     }
 
     /// log at level `Level.Trace`.
