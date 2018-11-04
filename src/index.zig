@@ -116,7 +116,7 @@ pub fn supportsAnsi(handle: os.FileHandle) bool {
 /// a simple thread-safe logger
 pub const Logger = struct.{
     const Self = @This();
-    const ProtectedOutStream = Protected(*io.OutStream(os.File.WriteError));
+    const ProtectedOutStream = Protected(*os.File.OutStream.Stream);
 
     file: os.File,
     file_stream: os.File.OutStream,
@@ -135,7 +135,7 @@ pub const Logger = struct.{
         var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
         _ = windows.GetConsoleScreenBufferInfo(file.handle, &info);
 
-        var result = Self.{
+        return Self.{
             .file = file,
             .file_stream = file.outStream(),
             .out_stream = undefined,
@@ -145,8 +145,6 @@ pub const Logger = struct.{
             .use_color = use_color,
             .use_bright = true,
         };
-        
-        return result;
     }
 
     // can't be done in `Logger.new` because of no copy-elision
