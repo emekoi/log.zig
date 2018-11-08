@@ -100,19 +100,6 @@ pub const Level = enum.{
     }
 };
 
-pub fn supportsAnsi(handle: os.FileHandle) bool {
-    if (builtin.os == builtin.Os.windows) {
-        var out: windows.DWORD = undefined;
-        return windows.GetConsoleMode(handle, &out) == 0;
-    } else {
-        if (builtin.link_libc) {
-            return std.c.isatty(handle) != 0;
-        } else {
-            return posix.isatty(handle);
-        }
-    }
-}
-
 /// a simple thread-safe logger
 pub const Logger = struct.{
     const Self = @This();
@@ -173,7 +160,7 @@ pub const Logger = struct.{
     }
 
     fn setTtyColor(self: *Self, color: TtyColor) void {
-        if (builtin.os == builtin.Os.windows and !supportsAnsi(self.file.handle)) {
+        if (builtin.os == builtin.Os.windows and !os.supportsAnsiEscapeCodes(self.file.handle)) {
             self.setTtyColorWindows(color);
         } else {
             var out = self.getOutStream();
