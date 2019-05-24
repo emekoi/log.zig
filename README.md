@@ -2,7 +2,7 @@
 a cross-platform, thread-safe logging library for [zig](https://ziglang.org/).
 
 ## usage
-```
+```zig
 const io = @import("std").io;
 const log = @import("log");
 const Logger = log.Logger;
