@@ -9,13 +9,14 @@ const builtin = @import("builtin");
 
 const io = std.io;
 const os = std.os;
+const fs = std.fs;
 
 const windows = os.windows;
 const posix = os.posix;
 
 const Mutex = std.Mutex;
 
-const TtyColor = enum.{
+const TtyColor = enum {
     Red,
     Green,
     Yellow,
@@ -26,14 +27,13 @@ const TtyColor = enum.{
 };
 
 fn Protected(comptime T: type) type {
-    return struct.{
+    return struct {
         const Self = @This();
 
         mutex: Mutex,
         private_data: T,
 
-
-        const HeldMutex = struct.{
+        const HeldMutex = struct {
             value: *T,
             held: Mutex.Held,
 
@@ -43,14 +43,14 @@ fn Protected(comptime T: type) type {
         };
 
         pub fn init(data: T) Self {
-            return Self.{
+            return Self{
                 .mutex = Mutex.init(),
                 .private_data = data,
             };
         }
 
         pub fn acquire(self: *Self) HeldMutex {
-            return HeldMutex.{
+            return HeldMutex{
                 .held = self.mutex.acquire(),
                 .value = &self.private_data,
             };
@@ -60,14 +60,13 @@ fn Protected(comptime T: type) type {
 
 const FOREGROUND_BLUE = 1;
 const FOREGROUND_GREEN = 2;
-const FOREGROUND_AQUA= 3;
+const FOREGROUND_AQUA = 3;
 const FOREGROUND_RED = 4;
 const FOREGROUND_MAGENTA = 5;
 const FOREGROUND_YELLOW = 6;
 
-
 /// different levels of logging
-pub const Level = enum.{
+pub const Level = enum {
     const Self = @This();
 
     Trace,
@@ -81,8 +80,8 @@ pub const Level = enum.{
         return switch (self) {
             Self.Trace => "TRACE",
             Self.Debug => "DEBUG",
-            Self.Info =>  "INFO",
-            Self.Warn =>  "WARN",
+            Self.Info => "INFO",
+            Self.Warn => "WARN",
             Self.Error => "ERROR",
             Self.Fatal => "FATAL",
         };
@@ -92,8 +91,8 @@ pub const Level = enum.{
         return switch (self) {
             Self.Trace => TtyColor.Blue,
             Self.Debug => TtyColor.Cyan,
-            Self.Info =>  TtyColor.Green,
-            Self.Warn =>  TtyColor.Yellow,
+            Self.Info => TtyColor.Green,
+            Self.Warn => TtyColor.Yellow,
             Self.Error => TtyColor.Red,
             Self.Fatal => TtyColor.Magenta,
         };
@@ -101,12 +100,12 @@ pub const Level = enum.{
 };
 
 /// a simple thread-safe logger
-pub const Logger = struct.{
+pub const Logger = struct {
     const Self = @This();
-    const ProtectedOutStream = Protected(*os.File.OutStream.Stream);
+    const ProtectedOutStream = Protected(*fs.File.OutStream);
 
-    file: os.File,
-    file_stream: os.File.OutStream,
+    file: fs.File,
+    file_stream: fs.File.OutStream,
     out_stream: ?ProtectedOutStream,
 
     default_attrs: windows.WORD,
@@ -115,14 +114,16 @@ pub const Logger = struct.{
     quiet: Protected(bool),
     use_color: bool,
     use_bright: bool,
-    
+
     /// create `Logger`.
-    pub fn new(file: os.File, use_color: bool) Self {
+    pub fn new(file: fs.File, use_color: bool) Self {
         // TODO handle error
         var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-        _ = windows.GetConsoleScreenBufferInfo(file.handle, &info);
+        if (std.Target.current.os.tag == .windows) {
+            _ = windows.kernel32.GetConsoleScreenBufferInfo(file.handle, &info);
+        }
 
-        return Self.{
+        return Self{
             .file = file,
             .file_stream = file.outStream(),
             .out_stream = undefined,
@@ -139,28 +140,27 @@ pub const Logger = struct.{
         if (self.out_stream) |out_stream| {
             return out_stream;
         } else {
-            self.out_stream = ProtectedOutStream.init(&self.file_stream.stream);
+            self.out_stream = ProtectedOutStream.init(&self.file_stream);
             return self.out_stream.?;
         }
     }
 
     fn setTtyColorWindows(self: *Self, color: TtyColor) void {
-
         // TODO handle errors
         const bright = if (self.use_bright) windows.FOREGROUND_INTENSITY else u16(0);
         _ = windows.SetConsoleTextAttribute(self.file.handle, switch (color) {
-            TtyColor.Red     => FOREGROUND_RED | bright,
-            TtyColor.Green   => FOREGROUND_GREEN | bright,
-            TtyColor.Yellow  => FOREGROUND_YELLOW | bright,
+            TtyColor.Red => FOREGROUND_RED | bright,
+            TtyColor.Green => FOREGROUND_GREEN | bright,
+            TtyColor.Yellow => FOREGROUND_YELLOW | bright,
             TtyColor.Magenta => FOREGROUND_MAGENTA | bright,
-            TtyColor.Cyan    => FOREGROUND_AQUA | bright,
-            TtyColor.Blue    => FOREGROUND_BLUE | bright,
-            TtyColor.Reset   => self.default_attrs,
+            TtyColor.Cyan => FOREGROUND_AQUA | bright,
+            TtyColor.Blue => FOREGROUND_BLUE | bright,
+            TtyColor.Reset => self.default_attrs,
         });
     }
 
-    fn setTtyColor(self: *Self, color: TtyColor) void {
-        if (builtin.os == builtin.Os.windows and !os.supportsAnsiEscapeCodes(self.file.handle)) {
+    fn setTtyColor(self: *Self, color: TtyColor) !void {
+        if (std.Target.current.os.tag == .windows and !os.supportsAnsiEscapeCodes(self.file.handle)) {
             self.setTtyColorWindows(color);
         } else {
             var out = self.getOutStream();
@@ -169,15 +169,17 @@ pub const Logger = struct.{
 
             const bright = if (self.use_bright) "\x1b[1m" else "";
 
-            switch (color) {
-                TtyColor.Red     => out_held.value.*.print("{}\x1b[31m", bright) catch return,
-                TtyColor.Green   => out_held.value.*.print("{}\x1b[32m", bright) catch return,
-                TtyColor.Yellow  => out_held.value.*.print("{}\x1b[33m", bright) catch return,
-                TtyColor.Magenta => out_held.value.*.print("{}\x1b[35m", bright) catch return,
-                TtyColor.Cyan    => out_held.value.*.print("{}\x1b[36m", bright) catch return,
-                TtyColor.Blue    => out_held.value.*.print("{}\x1b[34m", bright) catch return,
-                TtyColor.Reset   => out_held.value.*.write("\x1b[0m") catch return,
-            }
+            return switch (color) {
+                TtyColor.Red => out_held.value.*.print("{}\x1b[31m", .{bright}),
+                TtyColor.Green => out_held.value.*.print("{}\x1b[32m", .{bright}),
+                TtyColor.Yellow => out_held.value.*.print("{}\x1b[33m", .{bright}),
+                TtyColor.Magenta => out_held.value.*.print("{}\x1b[35m", .{bright}),
+                TtyColor.Cyan => out_held.value.*.print("{}\x1b[36m", .{bright}),
+                TtyColor.Blue => out_held.value.*.print("{}\x1b[34m", .{bright}),
+                TtyColor.Reset => blk: {
+                    _ = try out_held.value.*.write("\x1b[0m");
+                },
+            };
         }
     }
 
@@ -191,23 +193,22 @@ pub const Logger = struct.{
         self.use_bright = use_bright;
     }
 
-    /// set the minimum logging level.
+    /// Set the minimum logging level.
     pub fn setLevel(self: *Self, level: Level) void {
         var held = self.level.acquire();
         defer held.release();
         held.value.* = level;
     }
 
-    /// outputs to stderr if true. true by default.
+    /// Outputs to stderr if true. true by default.
     pub fn setQuiet(self: *Self, quiet: bool) void {
         var held = self.quiet.acquire();
         defer held.release();
         held.value.* = quiet;
     }
 
-    /// TODO error union or `catch return`?
-    /// general purpose log function.
-    pub fn log(self: *Self, level: Level, comptime fmt: []const u8, args: ...) void {
+    /// General purpose log function.
+    pub fn log(self: *Self, level: Level, comptime fmt: []const u8, args: var) !void {
         const level_held = self.level.acquire();
         defer level_held.release();
 
@@ -223,97 +224,95 @@ pub const Logger = struct.{
         const quiet_held = self.quiet.acquire();
         defer quiet_held.release();
 
-        /// TODO get filename and number
-        /// TODO get time as a string
+        // TODO get filename and number
+        // TODO get time as a string
         // time includes the year
 
         if (!quiet_held.value.*) {
             if (self.use_color and self.file.isTty()) {
-                out_stream.print("{} ", os.time.timestamp()) catch return;
-                self.setTtyColor(level.color());
-                out_stream.print("[{}]", level.toString()) catch return;
-                self.setTtyColor(TtyColor.Reset);
-                out_stream.print(": ") catch return;
+                try out_stream.print("{} ", .{std.time.timestamp()});
+                try self.setTtyColor(level.color());
+                try out_stream.print("[{}]", .{level.toString()});
+                try self.setTtyColor(TtyColor.Reset);
+                try out_stream.print(": ", .{});
 
                 // out_stream.print("\x1b[90m{}:{}:", filename, line);
                 // self.resetTtyColor();
-
             } else {
-                out_stream.print("{} [{s5}]: ", os.time.timestamp(), level.toString()) catch return;
+                try out_stream.print("{} [{s}]: ", .{ std.time.timestamp(), level.toString() });
             }
-            out_stream.print(fmt, args) catch return;
-            out_stream.print("\n") catch return;
+            out_stream.print(fmt, .{}) catch return;
+            out_stream.print("\n", .{}) catch return;
         }
     }
 
     /// log at level `Level.Trace`.
-    pub fn logTrace(self: *Self, comptime fmt: []const u8, args: ...) void {
-        self.log(Level.Trace, fmt, args);
+    pub fn logTrace(self: *Self, comptime fmt: []const u8, args: var) void {
+        self.log(Level.Trace, fmt, args) catch return;
     }
 
     /// log at level `Level.Debug`.
-    pub fn logDebug(self: *Self, comptime fmt: []const u8, args: ...) void {
-        self.log(Level.Debug, fmt, args);
+    pub fn logDebug(self: *Self, comptime fmt: []const u8, args: var) void {
+        self.log(Level.Debug, fmt, args) catch return;
     }
 
     /// log at level `Level.Info`.
-    pub fn logInfo(self: *Self, comptime fmt: []const u8, args: ...) void {
-        self.log(Level.Info, fmt, args);
+    pub fn logInfo(self: *Self, comptime fmt: []const u8, args: var) void {
+        self.log(Level.Info, fmt, args) catch return;
     }
 
     /// log at level `Level.Warn`.
-    pub fn logWarn(self: *Self, comptime fmt: []const u8, args: ...) void {
-        self.log(Level.Warn, fmt, args);
+    pub fn logWarn(self: *Self, comptime fmt: []const u8, args: var) void {
+        self.log(Level.Warn, fmt, args) catch return;
     }
 
     /// log at level `Level.Error`.
-    pub fn logError(self: *Self, comptime fmt: []const u8, args: ...) void {
-        self.log(Level.Error, fmt, args);
+    pub fn logError(self: *Self, comptime fmt: []const u8, args: var) void {
+        self.log(Level.Error, fmt, args) catch return;
     }
 
     /// log at level `Level.Fatal`.
-    pub fn logFatal(self: *Self, comptime fmt: []const u8, args: ...) void {
-        self.log(Level.Fatal, fmt, args);
+    pub fn logFatal(self: *Self, comptime fmt: []const u8, args: var) void {
+        self.log(Level.Fatal, fmt, args) catch return;
     }
 };
 
 test "log_with_color" {
-    var logger = Logger.new(try io.getStdOut(), true);
-    std.debug.warn("\n");
+    var logger = Logger.new(io.getStdOut(), true);
+    std.debug.warn("\n", .{});
 
-    logger.logTrace("hi");
-    logger.logDebug("hey");
-    logger.logInfo("hello");
-    logger.logWarn("greetings");
-    logger.logError("salutations");
-    logger.logFatal("goodbye");
+    logger.logTrace("hi", .{});
+    logger.logDebug("hey", .{});
+    logger.logInfo("hello", .{});
+    logger.logWarn("greetings", .{});
+    logger.logError("salutations", .{});
+    logger.logFatal("goodbye", .{});
 }
 
 fn worker(logger: *Logger) void {
-    logger.logTrace("hi");
-    os.time.sleep(10000);
-    logger.logDebug("hey");
-    os.time.sleep(10);
-    logger.logInfo("hello");
-    os.time.sleep(100);
-    logger.logWarn("greetings");
-    os.time.sleep(1000);
-    logger.logError("salutations");
-    os.time.sleep(10000);
-    logger.logFatal("goodbye");
-    os.time.sleep(1000000000);
+    logger.logTrace("hi", .{});
+    std.time.sleep(10000);
+    logger.logDebug("hey", .{});
+    std.time.sleep(10);
+    logger.logInfo("hello", .{});
+    std.time.sleep(100);
+    logger.logWarn("greetings", .{});
+    std.time.sleep(1000);
+    logger.logError("salutations", .{});
+    std.time.sleep(10000);
+    logger.logFatal("goodbye", .{});
+    std.time.sleep(1000000000);
 }
 
-
 test "log_thread_safe" {
-    var logger = Logger.new(try io.getStdOut(), true);
-    std.debug.warn("\n");
+    var logger = Logger.new(io.getStdOut(), true);
+    std.debug.warn("\n", .{});
 
     const thread_count = 5;
-    var threads: [thread_count]*std.os.Thread = undefined;
-    
+    var threads: [thread_count]*std.Thread = undefined;
+
     for (threads) |*t| {
-        t.* = try std.os.spawnThread(&logger, worker);
+        t.* = try std.Thread.spawn(&logger, worker);
     }
 
     for (threads) |t| {
