@@ -235,14 +235,17 @@ pub const Logger = struct {
                 try out_stream.print("[{}]", .{level.toString()});
                 try self.setTtyColor(TtyColor.Reset);
                 try out_stream.print(": ", .{});
-
                 // out_stream.print("\x1b[90m{}:{}:", filename, line);
                 // self.resetTtyColor();
             } else {
                 try out_stream.print("{} [{s}]: ", .{ std.time.timestamp(), level.toString() });
             }
-            out_stream.print(fmt, .{}) catch return;
-            out_stream.print("\n", .{}) catch return;
+            if (args.len > 0) {
+                out_stream.print(fmt, args) catch return;
+            } else {
+                _ = out_stream.write(fmt) catch return;
+            }
+            _ = out_stream.write("\n") catch return;
         }
     }
 
@@ -280,10 +283,12 @@ pub const Logger = struct {
 test "log_with_color" {
     var logger = Logger.new(io.getStdOut(), true);
     std.debug.warn("\n", .{});
-
     logger.logTrace("hi", .{});
     logger.logDebug("hey", .{});
     logger.logInfo("hello", .{});
+    const world = "world";
+    const num = 12345;
+    logger.logInfo("hello {} {}", .{ world, num });
     logger.logWarn("greetings", .{});
     logger.logError("salutations", .{});
     logger.logFatal("goodbye", .{});
